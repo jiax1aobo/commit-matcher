@@ -1,0 +1,11 @@
+root
+ +- src  required
+ +- test optional
+ +- lib	 optional
+ +- deps required
+
+required dependences:
+
+deps/
+	tree-sitter
+	tree-sitter-<language>
