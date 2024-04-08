@@ -6,6 +6,13 @@ root
 
 required dependences:
 
+src/tree_sitter/
+	api.h
+
+lib/
+	libtree-sitter
+	libtree-sitter-<language>
+
 deps/
 	tree-sitter
 	tree-sitter-<language>
