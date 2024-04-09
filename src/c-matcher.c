@@ -1,6 +1,7 @@
 
 #include "tree_sitter/api.h"
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -14,37 +15,79 @@ const TSLanguage *tree_sitter_c(void);
 #define BUFF_MAX_SIZE 1024
 char g_buff[BUFF_MAX_SIZE + 1];
 
-const char *src_read(void *payload, uint32_t byte_index,
-                    TSPoint position, uint32_t *bytes_read) {
-    int rdnb = 0;
-    int fd = *(int *)payload;
-    g_buff[0] = '\0';
+/* KEEP 类 完全保留
+ * DROP 类 完全删除
+ * SWAP 类 替换保留 */
+typedef enum ProcType {
+    PROC_TYPE_KEEP, /* pure EN/ZH or mix EN/ZH */
+    PROC_TYPE_DROP, /* contains sunje/korean */
+    PROC_TYPE_SWAP  /* {CHN} */
+} ProcType;
 
-    lseek(fd, byte_index, SEEK_SET);
+typedef struct ProcEntry {
+    uint32_t start;
+    uint32_t end;
+    uint32_t type;
+    char *replace;
+} ProcEntry;
 
-    rdnb = read(fd, g_buff, BUFF_MAX_SIZE);
+int g_ic = 0;
+ProcEntry g_proc_entry[1024 * 4];
 
-    if (rdnb == 0) {
-        *bytes_read = 0;
-        goto error;
-    } else if (rdnb > 0) {
-        assert(rdnb <= BUFF_MAX_SIZE);
-        g_buff[rdnb] = '\0';
-        *bytes_read = rdnb;
+#define init_proc_entry() do {      \
+    g_proc_entry[g_ic].start = 0;   \
+    g_proc_entry[g_ic].end = 0;     \
+    g_ic++;                         \
+} while(0)
+
+#define set_proc_entry(_start, _end, _type) do { \
+    g_proc_entry[g_ic].start = _start;           \
+    g_proc_entry[g_ic].end = _end;               \
+    g_proc_entry[g_ic].type = _type;             \
+    g_ic++;                                      \
+} while(0)
+
+const char *src_read(void *p_fd, uint32_t b_off, TSPoint pos, uint32_t *b_rd);
+
+
+// bool pick_at_brief_chn(const char *payload) {
+    // if (NULL != strstr(payload, "@brief CHN")) {
+        // return true;
+    // } else {
+        // return false;
+    // }
+// }
+
+bool pick_find_string(const char *payload, uint32_t start, uint32_t end) {
+    if (strcasestr(payload, "sunje") != NULL) {
+        set_proc_entry(start, end, PROC_TYPE_DROP);
+        return true;
     } else {
-        perror("src_read()");
-        goto error;
+        return false;
     }
-
-    return g_buff;
-    
-error:
-    return NULL;
 }
 
-char g_piece[BUFF_MAX_SIZE * 2 + 1];
+bool pick_curly_braced_chn(const char *payload, uint32_t start, uint32_t end) {
+    if (strstr(payload, "{CHN") != NULL) {
+        set_proc_entry(start, end, PROC_TYPE_SWAP);
+        return true;
+    } else {
+        return false;
+    }
+}
 
-void remove_comment(TSNode self, TSInput input) {
+/* @TODO 增加回调来处理注释 */
+typedef bool (*picker)(const char *, uint32_t, uint32_t);
+picker g_picker_array[] = {
+    // pick_at_brief_chn,
+    pick_find_string,
+    // NULL
+};
+
+int g_pa_cnt = sizeof(g_picker_array) / sizeof(picker);
+
+char g_piece[BUFF_MAX_SIZE * 2 + 1];
+void pickup_comment(TSNode self, TSInput input) {
     int fd = *(int *)input.payload;
     const char *curr_type = ts_node_type(self);
     if (strcmp(curr_type, "comment") == 0) {
@@ -57,13 +100,64 @@ void remove_comment(TSNode self, TSInput input) {
         read(fd, g_piece, len);
         g_piece[len] = '\0';
         (void)lseek(fd, curr_off, SEEK_SET);
-        printf("comment : %s\n", g_piece);
+        //printf("comment : %s\n", g_piece);
+
+        bool picked = false;
+        for (int j = 0; j < g_pa_cnt; j++) {
+            if (g_picker_array[j](g_piece, start, end) == true) {
+                picked = true;
+                break;
+            }
+        }
+        if (!picked) {
+            set_proc_entry(start, end, PROC_TYPE_KEEP);
+        }
     }
 
     int child_cnt = ts_node_child_count(self);
     for (int i = 0; i < child_cnt; i++) {
         TSNode child = ts_node_child(self, i);
-        remove_comment(child, input);
+        pickup_comment(child, input);
+    }
+}
+
+char g_output[BUFF_MAX_SIZE * 10 + 1];
+
+/* return -1 for no drop from `after` */
+int find_drop(int after) {
+    for (size_t i = after + 1; i < g_ic; i++) {
+        if (g_proc_entry[i].type == PROC_TYPE_DROP) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+void output_process(int fd) {
+    off_t f_end = lseek(fd, 0, SEEK_END);
+    int curr = 0;
+    int drop = find_drop(-1);
+    int len;
+    ssize_t nb;
+
+    while (drop < g_ic) {
+        if (drop == -1) {
+            len = f_end - g_proc_entry[curr].end;
+            lseek(fd, g_proc_entry[curr].end, SEEK_SET);
+            nb = read(fd, g_output, len);
+            g_output[len] = '\0';
+            printf("%s", g_output);
+            break;
+        } else {
+            len = g_proc_entry[drop].start - g_proc_entry[curr].end;
+            lseek(fd, g_proc_entry[curr].end, SEEK_SET);
+            nb = read(fd, g_output, len);
+            g_output[len] = '\0';
+            printf("%s", g_output);
+            curr = drop;
+        }
+
+        drop = find_drop(curr);
     }
 }
 
@@ -88,15 +182,72 @@ int main(int argc, char **argv) {
     TSTree *tree = ts_parser_parse(parser, NULL, input);
 
     TSNode root = ts_tree_root_node(tree);
-    const char *node_type = ts_node_type(root);
-    printf("root node type: %s\n", node_type);
+    // const char *node_type = ts_node_type(root);
+    // printf("root node type: %s\n", node_type);
+    // printf("named child count: %d\n", ts_node_named_child_count(root));
+    init_proc_entry();
+    pickup_comment(root, input);
 
-    remove_comment(root, input);
+    // output_skip_comment(src_fd);
+    output_process(src_fd);
 
+    close(src_fd);
     return 0;
     
 fatal:
     return -1;
+}
+
+const char *src_read(void *p_fd, uint32_t b_off, TSPoint pos, uint32_t *b_rd) {
+    int rdnb = 0;
+    int fd = *(int *)p_fd;
+    g_buff[0] = '\0';
+
+    lseek(fd, b_off, SEEK_SET);
+
+    rdnb = read(fd, g_buff, BUFF_MAX_SIZE);
+
+    if (rdnb == 0) {
+        *b_rd = 0;
+        goto error;
+    } else if (rdnb > 0) {
+        assert(rdnb <= BUFF_MAX_SIZE);
+        g_buff[rdnb] = '\0';
+        *b_rd = rdnb;
+    } else {
+        perror("src_read()");
+        goto error;
+    }
+
+    return g_buff;
+    
+error:
+    return NULL;
+}
+
+void output_skip_comment(int fd) {
+    printf("comment number : %d\n", g_ic);
+    off_t f_end = lseek(fd, 0, SEEK_END);
+    int len = g_proc_entry[0].start;
+    lseek(fd, 0, SEEK_SET);
+    read(fd, g_output, len);
+    g_output[len] = '\0';
+    printf("%s", g_output);
+
+    size_t i;
+    for (i = 1; i < g_ic; i++) {
+        len = g_proc_entry[i].start - g_proc_entry[i-1].end;
+        lseek(fd, g_proc_entry[i-1].end, SEEK_SET);
+        read(fd, g_output, len);
+        g_output[len] = '\0';
+        printf("%s", g_output);
+    }
+
+    len = f_end - g_proc_entry[i-1].end;
+    lseek(fd, g_proc_entry[i-1].end, SEEK_SET);
+    read(fd, g_output, len);   
+    g_output[len] = '\0';
+    printf("%s", g_output);
 }
 
 /*

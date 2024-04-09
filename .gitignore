@@ -2,3 +2,4 @@ deps/*
 bin/*
 lib/*
 test/*
+.vscode/*
