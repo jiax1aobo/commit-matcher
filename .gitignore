@@ -3,3 +3,5 @@ bin/*
 lib/*
 test/*
 .vscode/*
+build/*
+.cache/*
