@@ -1,4 +1,4 @@
-add_subdirectory(matcher)
+add_subdirectory(./matcher)
 
 include_directories(./lib)
 
