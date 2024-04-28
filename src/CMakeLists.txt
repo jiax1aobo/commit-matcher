@@ -1,9 +1,12 @@
-add_subdirectory(./matcher)
-
-include_directories(./lib)
-
+# include_directories(${TREE_SITTER_INC})
+# message(STATUS ${TREE_SITTER_INC})
+include_directories(/Users/jiaxiaobo/Downloads/match-comment/deps/tree-sitter/lib/include)
 add_executable(main main.c)
 
-set(MATCHER_LIB "${CMAKE_CURRENT_SOURCE_DIR}/lib")
-target_link_libraries(main "${MATCHER_LIB}/libmatcher.a")
+target_link_libraries(main
+    ${TREE_SITTER}
+    ${TREE_SITTER_C}
+    ${TREE_SITTER_JAVA}
+    ${TREE_SITTER_PY}
+)
 

@@ -4,7 +4,6 @@
 #include <unistd.h> // lseek, read
 #include <fcntl.h> // open
 #include "matcher.h"
-#include "api.h"
 
 /**
  * Default Read Function

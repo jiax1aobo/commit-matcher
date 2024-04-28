@@ -1,7 +1,7 @@
 #ifndef _MATCHER_H_
 #define _MATCHER_H_
 
-#include "api.h"
+#include "tree_sitter/api.h"
 
 #define TRY(_expr) do { \
     if(!(_expr)) { \
